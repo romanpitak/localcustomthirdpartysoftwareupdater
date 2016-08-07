@@ -1,4 +1,5 @@
 import argparse
+import git
 import logging
 from logging import debug, info, warning, error
 import os
@@ -11,14 +12,45 @@ import urllib.parse
 
 
 class Sw:
+	_short_name = None
 
 	def update(self):
 		raise NotImplementedError()
 
+	@classmethod
+	def short_name(cls):
+		if cls._short_name is None:
+			raise NotImplementedError()
+		return cls._short_name
 
-class JetBrains(Sw):
 
-	short_name = None
+class _GitBased(Sw):
+
+	class MyProgressPrinter(git.RemoteProgress):
+		def update(self, op_code, cur_count, max_count=None, message=''):
+			print(op_code, cur_count, max_count, cur_count / (max_count or 100.0), message or "NO MESSAGE")
+
+	def update(self):
+		repo = git.Repo(os.sep.join([os.path.expanduser('~'), 'opt', self.short_name()]))
+		assert not repo.bare
+		info('FETCH')
+		for fetch_info in repo.remote().fetch(progress=self.MyProgressPrinter()):
+			debug("Updated %s to %s" % (fetch_info.ref, fetch_info.commit))
+		info('PULL')
+		for fetch_info in repo.remote().pull(progress=self.MyProgressPrinter()):
+			debug("Updated %s to %s" % (fetch_info.ref, fetch_info.commit))
+
+
+class Pyenv(_GitBased):
+	_short_name = 'pyenv'
+
+
+class Phpenv(_GitBased):
+	_short_name = 'phpenv'
+	# TODO php-build
+
+
+class _JetBrains(Sw):
 
 	_CODE = None
 	_DOT_DIR = None
@@ -49,7 +81,7 @@ class JetBrains(Sw):
 		])]
 
 	def _is_my_installed_path(self, path):
-		return os.path.isfile(path + '/bin/' + self.short_name + '.sh')
+		return os.path.isfile(path + '/bin/' + self.short_name() + '.sh')
 
 	def _pull_latest_release(self):
 		url = 'https://data.services.jetbrains.com/products/releases?' + urllib.parse.urlencode([
@@ -95,14 +127,14 @@ class JetBrains(Sw):
 			debug('tar dir: "%s"', tar_dir)
 			info('Extracting "%s" to "%s"', file_name, self._install_path)
 			tar_file_handle.extractall(path=self._install_path)
-		link_name = os.path.expanduser('~') + '/bin/' + self.short_name
+		link_name = os.path.expanduser('~') + '/bin/' + self.short_name()
 		if os.path.exists(link_name):
 			debug('Removing link "%s"', link_name)
 			if not os.path.islink(link_name):
 				error('Aborted! Not a link! "%s"', link_name)
 				return False
 			os.remove(link_name)
-		os.symlink('../opt/' + tar_dir + '/bin/' + self.short_name + '.sh', link_name)
+		os.symlink('../opt/' + tar_dir + '/bin/' + self.short_name() + '.sh', link_name)
 
 	def update_available(self):
 		latest = pkg_resources.parse_version(self.latest_version())
@@ -118,54 +150,54 @@ class JetBrains(Sw):
 		return self._pull_latest_file()
 
 
-class Clion(JetBrains):
+class Clion(_JetBrains):
 
-	short_name = 'clion'
+	_short_name = 'clion'
 
 	_CODE = 'CL'
 
 	def __init__(self):
 		super().__init__()
-		self._DOT_DIR = '.CLion' + self.installed_version()
+		self._DOT_DIR = '.CLion' + self.installed_version()  # TODO wont work
 
 
-class PhpStorm(JetBrains):
+class PhpStorm(_JetBrains):
 
-	short_name = 'phpstorm'
+	_short_name = 'phpstorm'
 
 	_CODE = 'PS'
 
 	def __init__(self):
 		super().__init__()
-		self._DOT_DIR = '.PhpStorm' + self.installed_version()
+		self._DOT_DIR = '.PhpStorm' + self.installed_version()  # TODO
 
 
-class PycharmCommunity(JetBrains):
+class PycharmCommunity(_JetBrains):
 
-	short_name = 'pycharm'
+	_short_name = 'pycharm'
 
 	_CODE = 'PCC'
 
 	def __init__(self):
 		super().__init__()
-		self._DOT_DIR = '.PyCharm' + self.installed_version()
+		self._DOT_DIR = '.PyCharm' + self.installed_version()  # TODO
 
 	def renew_eval(self):
 		return True
 
 
-class WebStorm(JetBrains):
+class WebStorm(_JetBrains):
 
-	short_name = 'webstorm'
+	_short_name = 'webstorm'
 
 	_CODE = 'WS'
 
 	def __init__(self):
 		super().__init__()
-		self._DOT_DIR = '.WebStorm' + self.installed_version()
+		self._DOT_DIR = '.WebStorm' + self.installed_version()  # TODO
 
 
-available_sw = [Clion, PhpStorm, PycharmCommunity, WebStorm]
+available_sw = [Clion, PhpStorm, PycharmCommunity, WebStorm, Pyenv, Phpenv]
 
 
 def main():
@@ -175,7 +207,7 @@ def main():
 
 	# TODO http://bugs.python.org/issue9625
 	# parser.add_argument('update', choices=[x.short_name for x in available_sw], nargs='*')
-	parser.add_argument('update', choices=[x.short_name for x in available_sw] + ['--'], nargs='*', default='--')
+	parser.add_argument('update', choices=['ALL'] + [x.short_name() for x in available_sw] + ['--'], nargs='*', default='--')
 
 	parser.add_argument('--autocomplete', action='store_true')
 
@@ -184,6 +216,8 @@ def main():
 	# TODO http://bugs.python.org/issue9625
 	if '--' == c.update:
 		c.update = []
+	elif 'ALL' in c.update:
+		c.update = [x.short_name() for x in available_sw]
 
 	if c.verbose is None:
 		logging.basicConfig(level=logging.WARNING)
@@ -204,9 +238,9 @@ def main():
 		]))
 		exit()
 	elif c.update:
-		available_sw_map = {sw.short_name: sw for sw in available_sw}
+		available_sw_map = {sw.short_name(): sw for sw in available_sw}
 		for sw_class in (available_sw_map[sw] for sw in list(set(c.update))):
-			info('Updating %s', sw_class.short_name)
+			info('Updating %s', sw_class.short_name())
 			sw = sw_class()
 			info(sw.update())
 	else:
