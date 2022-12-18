@@ -126,7 +126,26 @@ class _JetBrains(Sw):
 			tar_dir = tar_file_handle.next().name.split('/', 1)[0]
 			debug('tar dir: "%s"', tar_dir)
 			info('Extracting "%s" to "%s"', file_name, self._install_path)
-			tar_file_handle.extractall(path=self._install_path)
+def is_within_directory(directory, target):
+	
+	abs_directory = os.path.abspath(directory)
+	abs_target = os.path.abspath(target)
+
+	prefix = os.path.commonprefix([abs_directory, abs_target])
+	
+	return prefix == abs_directory
+
+def safe_extract(tar, path=".", members=None, *, numeric_owner=False):
+
+	for member in tar.getmembers():
+		member_path = os.path.join(path, member.name)
+		if not is_within_directory(path, member_path):
+			raise Exception("Attempted Path Traversal in Tar File")
+
+	tar.extractall(path, members, numeric_owner=numeric_owner) 
+	
+
+safe_extract(tar_file_handle, path=self._install_path)
 		link_name = os.path.expanduser('~') + '/bin/' + self.short_name()
 		if os.path.exists(link_name):
 			debug('Removing link "%s"', link_name)
